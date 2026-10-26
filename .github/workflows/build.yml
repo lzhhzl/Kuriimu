@@ -1,0 +1,70 @@
+name: Build
+
+on:
+  push:
+    branches: [build]
+    tags: ['v*']
+  pull_request:
+    branches: [build]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 完整历史 + tags：Release 构建时 get_git_info.ps1 需要
+          # git describe / rev-list --count 等 git 信息
+          fetch-depth: 0
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore Kuriimu.sln -NonInteractive
+
+      - name: Build (Release)
+        run: msbuild Kuriimu.sln /p:Configuration=Release /m /nologo /verbosity:minimal
+
+      - name: Collect output files
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE 'publish\Kuriimu'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          # 合并各工程 bin\Release 的输出到同一目录
+          # (Kuriimu / Kukkii / Karameru / Knit / runext 的 exe + 各插件 dll)
+          Get-ChildItem -Path 'src' -Recurse -Directory -Filter 'Release' |
+            Where-Object { $_.FullName -like '*\bin\Release' -and $_.FullName -notlike '*\KuriimuTests\bin\Release' } |
+            ForEach-Object {
+              Get-ChildItem -Path $_.FullName -File -Recurse |
+                ForEach-Object { Copy-Item $_.FullName -Destination $out -Force }
+            }
+
+          Get-ChildItem $out | Select-Object -ExpandProperty Name
+
+      - name: Pack zip
+        shell: pwsh
+        run: |
+          $name = "${{ github.ref_name }}" -replace '[\\/:*?"<>|]', '-'
+          Compress-Archive -Path 'publish\Kuriimu\*' -DestinationPath "publish\Kuriimu-$name.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kuriimu-${{ github.run_number }}
+          path: publish/*.zip
+          if-no-files-found: error
+
+      - name: Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: publish/*.zip
+          generate_release_notes: true
