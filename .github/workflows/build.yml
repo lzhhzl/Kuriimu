@@ -23,6 +23,13 @@ jobs:
           # git describe / rev-list --count 等 git 信息
           fetch-depth: 0
 
+      - name: Setup git identity
+        # get_git_info.ps1 在 Release 构建时读取 git user.name/email，
+        # runner 上默认未配置，为 null 会报 InvokeMethodOnNull
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
@@ -30,7 +37,11 @@ jobs:
         run: nuget restore Kuriimu.sln -NonInteractive
 
       - name: Build (Release)
-        run: msbuild Kuriimu.sln /p:Configuration=Release /m /nologo /verbosity:minimal
+        # 仓库内工程目标框架不统一（多为 net452，Knit 为 net45，
+        # archive_xc2 为 net461），而 runner 只带 4.5.2/4.7+/4.8 的
+        # targeting pack。统一用 4.5.2 引用程序集编译（4.5 -> 4.5.2 为
+        # 原地升级超集），产物仍可在 .NET 4.8 运行时上正常运行
+        run: msbuild Kuriimu.sln /p:Configuration=Release /p:TargetFrameworkVersion=v4.5.2 /m /nologo /verbosity:minimal
 
       - name: Collect output files
         shell: pwsh
